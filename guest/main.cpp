@@ -5,6 +5,7 @@
 #include <clocale>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -181,6 +182,82 @@ static Variant mjc_contacts() {
 		out.push_back(c.pos[1]);
 		out.push_back(c.pos[2]);
 		out.push_back(c.dist);
+	}
+	return PackedArray<double>(out);
+}
+
+// Crossings between strokes, computed by the engine's collision. Each stroke
+// (a run of `counts[i]` points from the flat `points` xyz array) becomes one
+// freejointed body of capsules of radius proximity/2, so a contact between
+// capsules of different strokes is a crossing at the contact midpoint. Contacts
+// within merge_epsilon of an earlier one are the same crossing and are dropped.
+// Returns the crossings as flat x, y, z triples. The host-facing surface the
+// curvenet pipeline calls, shaped like cassie_graph's cg_cycles.
+static Variant mj_crossings(PackedArray<float> points, PackedArray<int32_t> counts,
+		double proximity) {
+	// Coalesce contacts within a few capsule radii; a tessellated crossing then
+	// counts once rather than once per touching segment pair.
+	const double merge_epsilon = proximity * 3.0 > 0.03 ? proximity * 3.0 : 0.03;
+	const std::vector<float> pts = points.fetch();
+	const std::vector<int32_t> cnt = counts.fetch();
+	std::vector<double> out;
+	if (cnt.empty()) {
+		return PackedArray<double>(out);
+	}
+	// Geoms are numbered in emission order: stroke i contributes counts[i]-1 capsules.
+	std::vector<int> g2s;
+	for (size_t si = 0; si < cnt.size(); si++) {
+		const int caps = cnt[si] > 0 ? cnt[si] - 1 : 0;
+		for (int i = 0; i < caps; i++) {
+			g2s.push_back((int)si);
+		}
+	}
+	const double r = proximity * 0.5;
+	std::string s = "<mujoco><option gravity='0 0 0'/><worldbody>";
+	size_t off = 0;
+	char buf[256];
+	for (size_t si = 0; si < cnt.size(); si++) {
+		const int n = cnt[si];
+		s += "<body pos='0 0 0'><freejoint/>";
+		for (int i = 0; i + 1 < n; i++) {
+			const float *a = &pts[(off + (size_t)i) * 3];
+			const float *b = &pts[(off + (size_t)i + 1) * 3];
+			snprintf(buf, sizeof(buf),
+				"<geom type='capsule' size='%g' fromto='%g %g %g %g %g %g'/>",
+				(double)r, (double)a[0], (double)a[1], (double)a[2],
+				(double)b[0], (double)b[1], (double)b[2]);
+			s += buf;
+		}
+		s += "</body>";
+		off += (size_t)(n > 0 ? n : 0);
+	}
+	s += "</worldbody></mujoco>";
+	if (!load_xml_text(s.c_str(), (int)s.size())) {
+		return PackedArray<double>(out);
+	}
+	const double me2 = (double)merge_epsilon * (double)merge_epsilon;
+	for (int k = 0; k < g_data->ncon; k++) {
+		const mjContact &c = g_data->contact[k];
+		const int a = c.geom[0], b = c.geom[1];
+		if (a < 0 || b < 0 || a >= (int)g2s.size() || b >= (int)g2s.size()) {
+			continue;
+		}
+		if (g2s[a] == g2s[b]) {
+			continue;
+		}
+		bool merged = false;
+		for (size_t j = 0; j + 2 < out.size(); j += 3) {
+			const double dx = c.pos[0] - out[j], dy = c.pos[1] - out[j + 1], dz = c.pos[2] - out[j + 2];
+			if (dx * dx + dy * dy + dz * dz < me2) {
+				merged = true;
+				break;
+			}
+		}
+		if (!merged) {
+			out.push_back(c.pos[0]);
+			out.push_back(c.pos[1]);
+			out.push_back(c.pos[2]);
+		}
 	}
 	return PackedArray<double>(out);
 }
@@ -363,6 +440,7 @@ int main() {
 	ADD_API_FUNCTION(mjc_neq, "int", "", "Number of equality constraints");
 	ADD_API_FUNCTION(mjc_ncon, "int", "", "Active contacts this step");
 	ADD_API_FUNCTION(mjc_contacts, "PackedFloat64Array", "", "Active contacts as geom0, geom1, pos xyz, dist");
+	ADD_API_FUNCTION(mj_crossings, "PackedFloat64Array", "PackedFloat32Array points, PackedInt32Array counts, float proximity", "Stroke crossings as coalesced x,y,z triples");
 	ADD_API_FUNCTION(mjc_nbody, "int", "", "Number of bodies");
 	ADD_API_FUNCTION(mjc_bodies, "PackedFloat64Array", "", "Body transforms as x,y,z,qw,qx,qy,qz");
 	ADD_API_FUNCTION(mjc_ngeom, "int", "", "Number of geoms");
