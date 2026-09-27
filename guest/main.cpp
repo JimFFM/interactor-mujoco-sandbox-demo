@@ -164,6 +164,27 @@ static Variant mjc_ncon() {
 	return g_data == nullptr ? 0 : (int)g_data->ncon;
 }
 
+// Each active contact as geom0, geom1, pos x, y, z, dist — six doubles a
+// contact. pos is the midpoint between the two geoms, which is the crossing
+// point when the geoms are two strokes' capsules.
+static Variant mjc_contacts() {
+	std::vector<double> out;
+	if (g_model == nullptr || g_data == nullptr) {
+		return PackedArray<double>(out);
+	}
+	out.reserve((size_t)g_data->ncon * 6);
+	for (int i = 0; i < g_data->ncon; i++) {
+		const mjContact &c = g_data->contact[i];
+		out.push_back((double)c.geom[0]);
+		out.push_back((double)c.geom[1]);
+		out.push_back(c.pos[0]);
+		out.push_back(c.pos[1]);
+		out.push_back(c.pos[2]);
+		out.push_back(c.dist);
+	}
+	return PackedArray<double>(out);
+}
+
 static Variant mjc_qpos() {
 	if (g_model == nullptr || g_data == nullptr) {
 		return PackedArray<double>(std::vector<double>());
@@ -341,6 +362,7 @@ int main() {
 	ADD_API_FUNCTION(mjc_nq, "int", "", "Number of generalised coordinates");
 	ADD_API_FUNCTION(mjc_neq, "int", "", "Number of equality constraints");
 	ADD_API_FUNCTION(mjc_ncon, "int", "", "Active contacts this step");
+	ADD_API_FUNCTION(mjc_contacts, "PackedFloat64Array", "", "Active contacts as geom0, geom1, pos xyz, dist");
 	ADD_API_FUNCTION(mjc_nbody, "int", "", "Number of bodies");
 	ADD_API_FUNCTION(mjc_bodies, "PackedFloat64Array", "", "Body transforms as x,y,z,qw,qx,qy,qz");
 	ADD_API_FUNCTION(mjc_ngeom, "int", "", "Number of geoms");
