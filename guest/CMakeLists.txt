@@ -4,7 +4,17 @@ project(mjguest CXX C)
 get_filename_component(DEMO_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(MJ "${DEMO_ROOT}/third_party/riscv64-mujoco")
 
-add_subdirectory("${DEMO_ROOT}/third_party/sandbox-api/cmake" sandbox_cmake)
+# The guest API comes from the manifest's contract-guest-runtime when it is checked out beside this
+# repository, so the guest carries its .sandbox_variant size; the vendored copy is the fallback.
+set(_runtime_api "${DEMO_ROOT}/../../2-contract/guest-runtime/vendor/sandbox-api")
+if(EXISTS "${_runtime_api}/docker/api/api.cpp")
+	set(SANDBOX_API "${_runtime_api}" CACHE PATH "godot-sandbox guest API checkout")
+else()
+	set(SANDBOX_API "${DEMO_ROOT}/third_party/sandbox-api" CACHE PATH "godot-sandbox guest API checkout")
+endif()
+set(DOWNLOAD_RUNTIME_API OFF CACHE BOOL "" FORCE)
+set(ELF_NAME "mjstep" CACHE STRING "The guest program's name")
+add_subdirectory("${SANDBOX_API}/cmake" sandbox_cmake)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -19,9 +29,9 @@ add_custom_command(
 			"${DEMO_ROOT}/scripts/embed_model.py"
 	COMMENT "Embedding newtons_cradle.xml into the guest")
 
-add_sandbox_program(mjstep main.cpp "${CMAKE_CURRENT_BINARY_DIR}/model_data.h")
-target_include_directories(mjstep PRIVATE "${MJ}/include" "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(mjstep PRIVATE
+add_sandbox_program(${ELF_NAME} main.cpp station.cpp "${CMAKE_CURRENT_BINARY_DIR}/model_data.h")
+target_include_directories(${ELF_NAME} PRIVATE "${MJ}/include" "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(${ELF_NAME} PRIVATE
 	"${MJ}/lib/libmujoco.a" "${MJ}/lib/libccd.a" "${MJ}/lib/libtinyxml2.a"
 	"${MJ}/lib/libqhullstatic_r.a" "${MJ}/lib/libtinyobjloader.a" "${MJ}/lib/libminiz.a" "${MJ}/lib/liblodepng.a"
 	-lm -lstdc++)
