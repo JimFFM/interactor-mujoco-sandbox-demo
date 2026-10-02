@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "model_data.h"
+#include "station.h"
 
 // Arguments are declared as native types, not Variant. The host unboxes them
 // into registers when unboxed arguments are on, and a Variant parameter then
@@ -401,6 +402,73 @@ static Variant mjc_pivots() {
 	return PackedArray<double>(out);
 }
 
+// The station's colliders, terrain and player capsule (station.h has the layouts). Returns the
+// geom count, or -1 when the input or the model is refused.
+static Variant mjc_load_primitives(PackedArray<double> prims, PackedArray<double> grid, int nrow, int ncol,
+		PackedArray<double> hsize) {
+	std::string error;
+	const std::string xml = station::build_mjcf(prims.fetch(), grid.fetch(), nrow, ncol, hsize.fetch(), error);
+	if (xml.empty()) {
+		print(error.c_str());
+		return -1;
+	}
+	if (!load_xml_text(xml.c_str(), (int)xml.size())) {
+		return -1;
+	}
+	return (int)g_model->ngeom;
+}
+
+static Variant mjc_ray(PackedArray<double> origin, PackedArray<double> dir, double maxdist, int exclude_body) {
+	const std::vector<double> o = origin.fetch();
+	const std::vector<double> v = dir.fetch();
+	if (o.size() != 3 || v.size() != 3) {
+		return PackedArray<double>(station::ray(nullptr, nullptr, nullptr, nullptr, 0.0, -1));
+	}
+	return PackedArray<double>(station::ray(g_model, g_data, o.data(), v.data(), maxdist, exclude_body));
+}
+
+static bool set_state(PackedArray<double> values, mjtNum *dst, int count) {
+	const std::vector<double> v = values.fetch();
+	if (g_model == nullptr || dst == nullptr || v.size() != (size_t)count) {
+		return false;
+	}
+	for (size_t i = 0; i < v.size(); i++) {
+		dst[i] = v[i];
+	}
+	return true;
+}
+
+static Variant mjc_set_qpos(PackedArray<double> qpos) {
+	return set_state(qpos, g_data == nullptr ? nullptr : g_data->qpos, g_model == nullptr ? 0 : (int)g_model->nq);
+}
+
+static Variant mjc_set_qvel(PackedArray<double> qvel) {
+	return set_state(qvel, g_data == nullptr ? nullptr : g_data->qvel, g_model == nullptr ? 0 : (int)g_model->nv);
+}
+
+// Kinematics and collision for the current state, with no integration.
+static Variant mjc_forward() {
+	if (g_model == nullptr || g_data == nullptr) {
+		return false;
+	}
+	mj_forward(g_model, g_data);
+	return true;
+}
+
+static Variant mjc_mocap_set(int index, PackedArray<double> pose) {
+	const std::vector<double> p = pose.fetch();
+	if (g_model == nullptr || g_data == nullptr || index < 0 || index >= g_model->nmocap || p.size() != 7) {
+		return false;
+	}
+	for (int k = 0; k < 3; k++) {
+		g_data->mocap_pos[index * 3 + k] = p[k];
+	}
+	for (int k = 0; k < 4; k++) {
+		g_data->mocap_quat[index * 4 + k] = p[3 + k];
+	}
+	return true;
+}
+
 // Simulated time, so a restored run can be shown resuming rather than restarting.
 static Variant mjc_time() {
 	return g_data == nullptr ? 0.0 : (double)g_data->time;
@@ -452,5 +520,11 @@ int main() {
 	ADD_API_FUNCTION(mjc_qpos, "PackedFloat64Array", "", "Generalised positions");
 	ADD_API_FUNCTION(mjc_digest, "int", "", "Digest of the full integration state");
 	ADD_API_FUNCTION(mjc_lowest_mm, "float", "", "Lowest body height in millimetres");
+	ADD_API_FUNCTION(mjc_load_primitives, "int", "PackedFloat64Array prims, PackedFloat64Array grid, int nrow, int ncol, PackedFloat64Array hsize", "Load station colliders, terrain and the player capsule; returns the geom count or -1");
+	ADD_API_FUNCTION(mjc_ray, "PackedFloat64Array", "PackedFloat64Array origin, PackedFloat64Array dir, float maxdist, int exclude_body", "Nearest hit: hit, dist, point xyz, normal xyz, geom");
+	ADD_API_FUNCTION(mjc_set_qpos, "bool", "PackedFloat64Array qpos", "Set every generalised position");
+	ADD_API_FUNCTION(mjc_set_qvel, "bool", "PackedFloat64Array qvel", "Set every generalised velocity");
+	ADD_API_FUNCTION(mjc_forward, "bool", "", "Kinematics and collision without integrating");
+	ADD_API_FUNCTION(mjc_mocap_set, "bool", "int index, PackedFloat64Array pose", "Place a mocap body at x,y,z,qw,qx,qy,qz");
 	halt();
 }

@@ -34,6 +34,30 @@ Needs the two placed packages and clang — no cross-toolchain, no Docker:
 `5-repository/riscv64-sysroot` supplies headers, startup files and glibc;
 `5-repository/riscv64-mujoco` supplies the physics archives.
 
+## Station walking
+
+The same guest holds a station's colliders and answers the queries a walker needs, all in
+Godot's frame (y up, metres). `guest/station.h` has the layouts.
+
+| Call | What it does |
+| --- | --- |
+| `mjc_load_primitives(prims, grid, nrow, ncol, hsize)` | boxes and cylinders (12 doubles each, mocap flag last), a height-field terrain and a 0.3 m by 1.7 m player capsule on three slide joints; returns the geom count, or -1 |
+| `mjc_ray(origin, dir, maxdist, exclude_body)` | nearest hit: hit, dist, point xyz, normal xyz, geom. The player is the last body |
+| `mjc_set_qpos(q)`, `mjc_set_qvel(v)` | the whole state at once; a wrong length is refused |
+| `mjc_forward()` | kinematics and contacts without integrating |
+| `mjc_mocap_set(i, pose)` | moves a mocap collider (a train or a vehicle) to x, y, z, qw, qx, qy, qz |
+
+The pen runs a double-precision engine, so the guest is built at `DOUBLE_PRECISION=ON` against
+the manifest's contract-guest-runtime API, which marks it `.sandbox_variant` 40:
+
+    cmake -S guest -B guest/build -G Ninja -DDOUBLE_PRECISION=ON \
+      -DCMAKE_TOOLCHAIN_FILE=../../5-repository/riscv64-sysroot/toolchain.cmake
+    cmake --build guest/build && cp guest/build/mjstep project/plans/mujoco.double.elf
+
+`tests/guest/test_station.cpp` checks a ray against a box and a cylinder, the terrain's heights
+at its vertices, and that the same walk gives the same contacts bit for bit, each with a control
+that must fail.
+
 ## Where it stops, as of this commit
 
 `mjc_load_xml` **faults**, and MuJoCo is not what faults:
