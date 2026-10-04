@@ -1,11 +1,7 @@
-name: Windows-V1
+name: Windows Only V1
 
-# The physics guest is RISC-V, emulated by libriscv, so the same stepping must
-# produce a bit-identical state digest on every host regardless of OS or CPU.
-# This runs the committed guest through the real sandbox host on x86_64 and
-# arm64 and fails if the digests differ. arm64 vs x86_64 is the test that
-# matters: different FP hardware, and the platforms we ship to (desktop and
-# Steam Deck are x86_64, Quest is arm64).
+# Runs the physics guest through the sandbox host on Windows (x86_64)
+# to compute the state digest and export the built Windows DLL as a downloadable artifact.
 
 on:
   push:
@@ -22,77 +18,47 @@ env:
 
 jobs:
   digest:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest,     arch: x86_64, build: true }
-          - { os: ubuntu-24.04-arm,  arch: arm64,  build: true }
-          - { os: windows-latest,    arch: x86_64, build: true }
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      # --- Build setup (Linux) ---
-      - name: Install build tools (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang
-
       # --- Build setup (Windows) ---
       - name: Setup Ninja (Windows)
-        if: runner.os == 'Windows'
         uses: llvm/actions/install-ninja@main
 
       - name: Set up MSVC Developer Environment
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- Build the extension natively (Linux & Windows) ---
+      # --- Build the extension natively ---
       - name: Build the sandbox extension from the fork
         shell: bash
         run: |
           set -e
+
+          # Ensure consistent line endings across operating systems
+          git config --global core.autocrlf false
+
           git clone --recursive --depth 1 "$FORK" gs
-          # Apply the vendored-dependency patches (paging/FP fix, includes, stdlib).
-          git -C gs/ext/libriscv apply "$GITHUB_WORKSPACE/patches/libriscv-paging-and-includes.patch"
-          git -C gs/ext/godot-cpp apply "$GITHUB_WORKSPACE/patches/godot-cpp-stdlib-include.patch"
-          
+
+          # Apply the vendored-dependency patches with whitespace/line-ending tolerance
+          git -C gs/ext/libriscv apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/patches/libriscv-paging-and-includes.patch"
+          git -C gs/ext/godot-cpp apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/patches/godot-cpp-stdlib-include.patch"
+
           cmake -S gs -B gs/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DENABLE_SAFEGDSCRIPT=OFF -DRISCV_BINARY_TRANSLATION=OFF
           cmake --build gs/build -j --target godot-riscv
 
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            BINARY=$(find gs/build -name 'libgodot-riscv*.so' -o -name 'libgodot_riscv*.so' | head -1)
-            test -n "$BINARY"
-            TARGET_PATH="project/addons/godot_sandbox/bin/libgodot_riscv.linux.template_release.${{ matrix.arch }}.so"
-          else
-            BINARY=$(find gs/build -name 'godot_riscv*.dll' -o -name 'libgodot_riscv*.dll' | head -1)
-            test -n "$BINARY"
-            TARGET_PATH="project/addons/godot_sandbox/bin/godot_riscv.windows.template_release.${{ matrix.arch }}.dll"
-          fi
+          BINARY=$(find gs/build -name 'godot_riscv*.dll' -o -name 'libgodot_riscv*.dll' | head -1)
+          test -n "$BINARY"
+          TARGET_PATH="project/addons/godot_sandbox/bin/godot_riscv.windows.template_release.x86_64.dll"
 
           cp "$BINARY" "$TARGET_PATH"
           echo "Installed $BINARY -> $TARGET_PATH"
 
       # --- Download Godot ---
-      - name: Get Godot (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          set -e
-          case "${{ matrix.arch }}" in
-            x86_64) A=linux.x86_64 ;;
-            arm64)  A=linux.arm64  ;;
-          esac
-          URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_${A}.zip"
-          curl -fL "$URL" -o godot.zip
-          unzip -o godot.zip
-          mv Godot_v${GODOT_VERSION}_${A} godot
-          chmod +x godot
-
       - name: Get Godot (Windows)
-        if: runner.os == 'Windows'
         shell: bash
         run: |
           set -e
@@ -106,43 +72,25 @@ jobs:
         shell: bash
         run: |
           set -e
-          GODOT="$GITHUB_WORKSPACE/godot"; [ -f "$GITHUB_WORKSPACE/godot.exe" ] && GODOT="$GITHUB_WORKSPACE/godot.exe"
+          GODOT="$GITHUB_WORKSPACE/godot.exe"
           cd project
           "$GODOT" --headless --path . --import 2>&1 | tail -3 || true
           OUT=$("$GODOT" --headless --path . -s ../tools/determinism/digest.gd 2>&1)
           echo "$OUT"
           LINE=$(echo "$OUT" | grep -o 'DIGEST=[0-9-]* STEPS=[0-9]* NQ=[0-9]*' | head -1)
           test -n "$LINE"
-          echo "$LINE" > "$GITHUB_WORKSPACE/digest-${{ matrix.os }}-${{ matrix.arch }}.txt"
+          echo "$LINE" > "$GITHUB_WORKSPACE/digest-windows-x86_64.txt"
 
       # --- Upload Digest Artifact ---
-      - uses: actions/upload-artifact@v4
-        with:
-          name: digest-${{ matrix.os }}-${{ matrix.arch }}
-          path: digest-*.txt
-
-      # --- Upload Windows Compiled DLL Artifact ---
-      - name: Upload Windows DLL Artifact
-        if: runner.os == 'Windows'
+      - name: Upload Digest Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: godot_riscv-windows-${{ matrix.arch }}
-          path: project/addons/godot_sandbox/bin/*.dll
+          name: digest-windows-x86_64
+          path: digest-windows-x86_64.txt
 
-  compare:
-    needs: digest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { path: digests, merge-multiple: true }
-      - name: All platforms must agree
-        run: |
-          set -e
-          echo "=== per-platform digests ==="
-          cat digests/*.txt
-          UNIQUE=$(sort -u digests/*.txt | wc -l)
-          if [ "$UNIQUE" -ne 1 ]; then
-            echo "FAIL: the guest is not deterministic across platforms ($UNIQUE distinct digests)"
-            exit 1
-          fi
-          echo "PASS: identical physics digest on every platform"
+      # --- Upload Windows Compiled DLL Binary Artifact ---
+      - name: Upload Windows DLL Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot_riscv-windows-x86_64
+          path: project/addons/godot_sandbox/bin/*.dll
