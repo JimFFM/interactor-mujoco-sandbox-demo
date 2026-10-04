@@ -1,4 +1,4 @@
-name: Windows using MSVC 
+name: Windows-MSVC 
 
 # Runs the physics guest through the sandbox host on Windows (x86_64)
 # to compute the state digest and export the built Windows DLL as a downloadable artifact.
@@ -94,9 +94,6 @@ jobs:
       # --- Upload Windows Compiled DLL Binary Artifact ---
       - name: Upload Windows DLL Artifact
         uses: actions/upload-artifact@v4
-        with:
-          name: godot_riscv-windows-x86_64
-          path: project/addons/godot_sandbox/bin/*.dll
         with:
           name: godot_riscv-windows-x86_64
           path: project/addons/godot_sandbox/bin/*.dll
