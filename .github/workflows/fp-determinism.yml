@@ -1,4 +1,4 @@
-name: fp-determinism
+name: Windows
 
 # The physics guest is RISC-V, emulated by libriscv, so the same stepping must
 # produce a bit-identical state digest on every host regardless of OS or CPU.
@@ -28,18 +28,28 @@ jobs:
         include:
           - { os: ubuntu-latest,     arch: x86_64, build: true }
           - { os: ubuntu-24.04-arm,  arch: arm64,  build: true }
-          - { os: windows-latest,    arch: x86_64, build: false }  # reuse the committed DLL
+          - { os: windows-latest,    arch: x86_64, build: true }  # Changed build to true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      # --- Build the extension natively (Linux legs) ---
+      # --- Build setup (Linux) ---
       - name: Install build tools (Linux)
-        if: matrix.build
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang
 
+      # --- Build setup (Windows) ---
+      - name: Setup Ninja (Windows)
+        if: runner.os == 'Windows'
+        uses: llvm/actions/install-ninja@main
+
+      - name: Set up Clang (Windows)
+        if: runner.os == 'Windows'
+        uses: egor-tisin/setup-clang@v1
+
+      # --- Build the extension natively (Linux & Windows) ---
       - name: Build the sandbox extension from the fork
-        if: matrix.build
+        shell: bash
         run: |
           set -e
           git clone --recursive --depth 1 "$FORK" gs
@@ -51,14 +61,23 @@ jobs:
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DENABLE_SAFEGDSCRIPT=OFF -DRISCV_BINARY_TRANSLATION=OFF
           cmake --build gs/build -j --target godot-riscv
-          SO=$(find gs/build -name 'libgodot-riscv*.so' -o -name 'libgodot_riscv*.so' | head -1)
-          test -n "$SO"
-          cp "$SO" "project/addons/godot_sandbox/bin/libgodot_riscv.linux.template_release.${{ matrix.arch }}.so"
-          echo "installed $SO -> linux ${{ matrix.arch }}"
 
-      # --- Godot ---
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            BINARY=$(find gs/build -name 'libgodot-riscv*.so' -o -name 'libgodot_riscv*.so' | head -1)
+            test -n "$BINARY"
+            TARGET_PATH="project/addons/godot_sandbox/bin/libgodot_riscv.linux.template_release.${{ matrix.arch }}.so"
+          else
+            BINARY=$(find gs/build -name 'godot_riscv*.dll' -o -name 'libgodot_riscv*.dll' | head -1)
+            test -n "$BINARY"
+            TARGET_PATH="project/addons/godot_sandbox/bin/godot_riscv.windows.template_release.${{ matrix.arch }}.dll"
+          fi
+
+          cp "$BINARY" "$TARGET_PATH"
+          echo "Installed $BINARY -> $TARGET_PATH"
+
+      # --- Download Godot ---
       - name: Get Godot (Linux)
-        if: matrix.build
+        if: runner.os == 'Linux'
         run: |
           set -e
           case "${{ matrix.arch }}" in
@@ -68,11 +87,11 @@ jobs:
           URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_${A}.zip"
           curl -fL "$URL" -o godot.zip
           unzip -o godot.zip
-          mv Godot_v${GODOT_VERSION}_${A} godot
+          mv Godot_v${GODOT_VERSION}__${A} godot
           chmod +x godot
 
       - name: Get Godot (Windows)
-        if: ${{ !matrix.build }}
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           set -e
@@ -81,15 +100,13 @@ jobs:
           unzip -o godot.zip
           mv Godot_v${GODOT_VERSION}_win64.exe godot.exe
 
-      # --- Import once (registers classes), then run the digest ---
+      # --- Compute Digest ---
       - name: Compute digest
         shell: bash
         run: |
           set -e
           GODOT="$GITHUB_WORKSPACE/godot"; [ -f "$GITHUB_WORKSPACE/godot.exe" ] && GODOT="$GITHUB_WORKSPACE/godot.exe"
           cd project
-          # Import once so the extension's classes register, then run the digest.
-          # -s resolves relative to the CWD, so it must be run from project/.
           "$GODOT" --headless --path . --import 2>&1 | tail -3 || true
           OUT=$("$GODOT" --headless --path . -s ../tools/determinism/digest.gd 2>&1)
           echo "$OUT"
@@ -97,10 +114,19 @@ jobs:
           test -n "$LINE"
           echo "$LINE" > "$GITHUB_WORKSPACE/digest-${{ matrix.os }}-${{ matrix.arch }}.txt"
 
+      # --- Upload Digest Artifact ---
       - uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.os }}-${{ matrix.arch }}
           path: digest-*.txt
+
+      # --- Upload Windows Compiled DLL Binary Artifact ---
+      - name: Upload Windows DLL Artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot_riscv-windows-${{ matrix.arch }}
+          path: project/addons/godot_sandbox/bin/*.dll
 
   compare:
     needs: digest
