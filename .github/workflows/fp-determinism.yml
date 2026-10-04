@@ -1,4 +1,4 @@
-name: Windows Only V1
+name: Windows using MSVC 
 
 # Runs the physics guest through the sandbox host on Windows (x86_64)
 # to compute the state digest and export the built Windows DLL as a downloadable artifact.
@@ -29,7 +29,7 @@ jobs:
       - name: Set up MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- Build the extension natively ---
+      # --- Build the extension natively using MSVC ---
       - name: Build the sandbox extension from the fork
         shell: bash
         run: |
@@ -44,12 +44,9 @@ jobs:
           git -C gs/ext/libriscv apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/patches/libriscv-paging-and-includes.patch"
           git -C gs/ext/godot-cpp apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/patches/godot-cpp-stdlib-include.patch"
 
-          # Configure CMake using clang-cl and disabling position-independent code (-fPIC) on Windows
+          # Configure CMake using default MSVC compiler (cl.exe) initialized by msvc-dev-cmd
           cmake -S gs -B gs/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang-cl \
-            -DCMAKE_CXX_COMPILER=clang-cl \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
             -DENABLE_SAFEGDSCRIPT=OFF \
             -DRISCV_BINARY_TRANSLATION=OFF
 
@@ -97,6 +94,9 @@ jobs:
       # --- Upload Windows Compiled DLL Binary Artifact ---
       - name: Upload Windows DLL Artifact
         uses: actions/upload-artifact@v4
+        with:
+          name: godot_riscv-windows-x86_64
+          path: project/addons/godot_sandbox/bin/*.dll
         with:
           name: godot_riscv-windows-x86_64
           path: project/addons/godot_sandbox/bin/*.dll
