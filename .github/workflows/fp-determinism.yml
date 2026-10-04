@@ -44,16 +44,22 @@ jobs:
           git -C gs/ext/libriscv apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/patches/libriscv-paging-and-includes.patch"
           git -C gs/ext/godot-cpp apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/patches/godot-cpp-stdlib-include.patch"
 
+          # Configure CMake using clang-cl and disabling position-independent code (-fPIC) on Windows
           cmake -S gs -B gs/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DENABLE_SAFEGDSCRIPT=OFF -DRISCV_BINARY_TRANSLATION=OFF
+            -DCMAKE_C_COMPILER=clang-cl \
+            -DCMAKE_CXX_COMPILER=clang-cl \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
+            -DENABLE_SAFEGDSCRIPT=OFF \
+            -DRISCV_BINARY_TRANSLATION=OFF
+
           cmake --build gs/build -j --target godot-riscv
 
           BINARY=$(find gs/build -name 'godot_riscv*.dll' -o -name 'libgodot_riscv*.dll' | head -1)
           test -n "$BINARY"
           TARGET_PATH="project/addons/godot_sandbox/bin/godot_riscv.windows.template_release.x86_64.dll"
 
+          mkdir -p project/addons/godot_sandbox/bin
           cp "$BINARY" "$TARGET_PATH"
           echo "Installed $BINARY -> $TARGET_PATH"
 
